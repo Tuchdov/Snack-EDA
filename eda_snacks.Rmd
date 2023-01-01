@@ -1,0 +1,535 @@
+---
+title: "EDA Final Project"
+author: "Dov Tuch"
+output: 
+  pdf_document: default
+  html_notebook: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r, include = F}
+library(tidyverse)
+library(tidytext)
+library(caret)
+library(patchwork)
+library(ggrepel)
+```
+
+```{r, include= FALSE}
+setwd("~/Documents/Studies/Ds_applications/Final_ProjectTuchdov")
+food_train <- read_csv("data/food_train.csv")
+nutrients <- read_csv("data/nutrients.csv")
+food_nutrients <- read_csv("data/food_nutrients.csv")
+
+
+```
+
+# Welcome
+
+Hello Giora, This EDA can be summed up into 2 parts. The first one is
+just general EDA with no story or purpose behind it. The second part is
+a market analysis I conducted with the data at hand, with a mission and
+a little bit of sarcasm :) Hope you enjoy (the second part).
+
+# First part: preparing the data set and general EDA.
+
+I will make the 3 data sets to one single tibble. Where the columns are
+the nutritional values, and the first 10 ingredients in each snack.
+
+```{r, warning= FALSE, results='hide'}
+fst_10ings = str_replace_all(food_train$ingredients, "[().*+-]", "") %>% 
+str_split_fixed( ',',n = 11) %>% as_tibble() %>% 
+  select(-V11)
+
+```
+
+```{r, echo= F, results='hide',include=FALSE}
+# import the dataset where the nuritional values are columns, the code for this 
+# data frame can be located at fp_model2
+food_nut = read_csv('/home/dovikde/Documents/Studies/Ds_applications/Final_ProjectTuchdov/all_nuts.csv')
+
+```
+
+```{r, results='hide'}
+# removing zero variance columns
+zv_cols = nearZeroVar(food_nut, names = T)
+
+food_nut2 = food_nut %>%
+  select(-all_of(zv_cols))
+food_joined = food_train %>% 
+  left_join(food_nut2, by = 'idx') 
+food_complete = bind_cols(food_joined,fst_10ings )
+
+```
+
+```{r}
+food_train %>% 
+  distinct(serving_size_unit)
+```
+
+```{r}
+food_complete %>% 
+  filter(serving_size_unit == 'ml') %>% 
+  nrow()
+```
+
+Because we have only 8 observations that are in ml units (out of \~
+32K), I will drop the *serving_size_unit* column and those observations.
+The data set that I will be working with will look like where v_i is the
+i-th appearing ingredient in the ingredients column:
+
+```{r, echo=FALSE}
+food_final = food_complete %>%
+  filter(serving_size_unit == 'g') %>% 
+  select(-c(serving_size_unit, ingredients,...9))
+food_final <- food_final %>%
+   mutate(across(everything(), ~ifelse(.=="", NA, as.character(.))),
+          across(c(serving_size,'1003':'2000'), ~ as.numeric(.))) %>% 
+  rename(Protein = '1003', Total_fat = '1004', Carbohydrate = '1005',
+         Energy = '1008', Total_fiber = '1079', Calcium = '1087', Sodium ='1093',
+         Iron = '1089',Saturated_fat = '1258', Sugars ='2000') %>% 
+  rename_with(str_to_lower)
+food_final %>% 
+  glimpse()
+
+```
+
+## Correlations between the nutrients across all samples and by categories.
+
+```{r,results='hide'}
+# helper functions
+# Get lower diagonal of the correlation matrix
+get_lower_diag<-function(cormat){
+    cormat[lower.tri(cormat)] <- NA
+    return(cormat)
+  }
+reorder_cormat <- function(cormat){
+# Use correlation between variables as distance
+dd <- as.dist((1-cormat)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+}
+
+# correltaion function heatmap
+corr_mat = function(category_data){
+  var_name = paste0(category_data)
+  cor_nut = food_final %>% 
+  filter(category == var_name) %>% 
+  select(protein:sugars) %>% 
+  cor() %>% 
+  round(2)
+  titleplot = str_replace_all(var_name, '_', " ")
+  
+  lower_diag= get_lower_diag(cor_nut)
+  melted_cormat= reshape2::melt(lower_diag)
+  heatmap_fun = ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+   geom_tile(color = "ghostwhite")+
+   scale_fill_gradient2(low = "blue1", high = "tomato2", mid = "ghostwhite", 
+     midpoint = 0, limit = c(-1,1), space = "Lab", 
+     ) +
+    ggtitle(titleplot)+
+    theme_minimal()+ 
+   # theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+   #    size = 12, hjust = 1))+
+   coord_fixed()+
+    geom_text(aes(Var2, Var1, label = value), color = "black", size = 2)+ 
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))
+  
+  return(heatmap_fun)
+  
+}
+```
+
+```{r, echo = F}
+cor_nut3 = food_final %>% 
+  select(protein:sugars) %>% 
+  cor() %>% 
+  round(2)
+  
+  lower_diag= get_lower_diag(cor_nut3)
+  melted_cormat= reshape2::melt(lower_diag)
+  my_heatmap = ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+   geom_tile(color = "ghostwhite")+
+   scale_fill_gradient2(low = "blue1", high = "tomato2", mid = "ghostwhite", 
+     midpoint = 0, limit = c(-1,1), space = "Lab", 
+     ) +
+    ggtitle("correlation across all samples")+
+    theme_minimal()+ 
+   # theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+   #    size = 12, hjust = 1))+
+   coord_fixed()+
+    geom_text(aes(Var2, Var1, label = value), color = "black", size = 1)+ 
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))
+  
+  my_heatmap
+  
+```
+
+For all the snacks. total fat and protein are strongly inversely
+correlated. With carbohydrates. While energy and total fat are highly
+correlated.
+
+```{r,echo=FALSE}
+
+cor_choc = corr_mat('chocolate')
+cor_cookies = corr_mat('cookies_biscuits')
+cor_cakes = corr_mat('cakes_cupcakes_snack_cakes')
+cor_popcorn = corr_mat('popcorn_peanuts_seeds_related_snacks')
+cor_candy = corr_mat('candy')
+cor_chips = corr_mat("chips_pretzels_snacks")
+
+
+cor_choc + cor_cookies + plot_layout(guides = 'collect') +
+  plot_annotation(title = 'The corelation of nutrients by category')
+cor_cakes + cor_popcorn + plot_layout(guides = 'collect')
+cor_candy + cor_chips  + plot_layout(guides = 'collect')
+
+```
+
+When we look at the nutrient correlation by category we find different
+results. Candies total fat is very strongly correlated with saturated
+fat, but for peanuts There is no correlation between the two nutritional
+values. In the cakes category carbohydrates are strongly correlated with
+sugars but not with chips. This realtionships can be used later as
+predictors for each category.
+
+```{r, echo= F, results='hide',message= FALSE}
+
+fd_final = food_final %>% 
+  mutate(across((v1:v10), ~ str_replace_all(.,"[^[\\da-zA-Z ]]","")),
+         across((v1:v10), ~ str_replace_na(.)))
+
+ing1 = fd_final %>% 
+  group_by(category, v1) %>% 
+  summarise(n = n()) %>% 
+  mutate(nut_prop = n /sum(n),v1) %>% 
+  arrange(desc(nut_prop))
+
+ing2 = fd_final %>% 
+  group_by(category, v2) %>% 
+  summarise(m = n()) %>% 
+  mutate(nut_prop2 = m /sum(m)) %>% 
+  select(nut_prop2, category, v2) %>% 
+  arrange(desc(nut_prop2))
+
+ing3 = fd_final %>% 
+  group_by(category, v3) %>% 
+  summarise(m = n()) %>% 
+  mutate(nut_prop3 = m /sum(m)) %>% 
+  select(nut_prop3, category, v3) %>% 
+  arrange(desc(nut_prop3))
+
+ing1_top_5 = ing1 %>% 
+  group_by(category) %>% 
+  slice_max(order_by = nut_prop, n =1 )
+
+ing2_top_5 = ing2 %>% 
+  group_by(category) %>% 
+  slice_max(order_by = nut_prop2, n =1 )
+
+ing3_top_5 = ing3 %>% 
+  group_by(category) %>% 
+  slice_max(order_by = nut_prop3, n =1 )
+```
+
+```{r, echo= F}
+table_0 = ing1_top_5 %>% 
+  bind_cols(ing2_top_5 %>% 
+              ungroup() %>% 
+              select(-category)) %>% 
+  bind_cols(ing3_top_5 %>% 
+              ungroup() %>% 
+              select(-category)
+              ) %>% 
+  select(-n)
+```
+
+```{r}
+table_0 = table_0 %>% 
+  mutate(category = 
+  case_when(category == "cakes_cupcakes_snack_cakes" ~ 'cakes',
+            category =="chips_pretzels_snacks" ~ 'chips',
+            category == 'cookies_biscuits' ~ 'cookies',
+            category == 'popcorn_peanuts_seeds_related_snacks' ~ 'snack related',
+            TRUE ~ as.character(category))
+  )
+```
+
+Let's look at the most occurring ingredients by category.
+
+```{r, echo= F}
+
+table_0 %>% 
+  ggplot(aes(x = category, y = nut_prop, fill = v1))+
+  geom_bar(stat = "identity")+
+  plot_annotation(title = 'The proprtion of the top most used ingredient by category')+
+  ylab('most common ingredient')+
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 8, hjust = 1))+
+  guides(fill= guide_legend(title = "ingredient"))
+
+table_0 %>% 
+  ggplot(aes(x = category, y = nut_prop2, fill = v2))+
+  geom_bar(stat = "identity")+
+  plot_annotation(title = 'The proprtion of the top 2nd most used ingredient by category')+
+  ylab('most common ingredient')+
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 8, hjust = 1))+
+  guides(fill= guide_legend(title = "ingredient"))
+
+table_0 %>% 
+  ggplot(aes(x = category, y = nut_prop3, fill = v3))+
+  geom_bar(stat = "identity")+
+  ylab('most common ingredient')+
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 8, hjust = 1)
+   )+
+  guides(fill= guide_legend(title = "ingredient"))
+
+```
+
+We can get a lot of predicting power with those values, when potatoes
+are the first ingredient we can have a good guess that it's from the
+chips category. It's not a big surprise that peanuts and seeds have
+mostly one ingredient, that's why the 2nd and 3rd most common
+"ingredient" is NA.
+
+# Second Part: Market Analysis!
+
+During this EDA my mother started to nag me that I don't do anything
+with my Econ major, just statistics all day. So to make mummy proud I
+decided to go from general EDA to a market research!
+
+# First question, where is the competition?
+
+To answer this we need to understand how many brands are in each
+category? To measure this we will look at the ratio of
+n_brands/n_products in the category. We will call this measure as the
+*Diversity*. so if the *Diversity* is high there are many brands in this
+market and the highest value it can get is 1. When there is low market
+diversity it means that there are less players in the market and so the
+diversity will be close to 0.
+
+```{r, echo = F}
+food_train %>% 
+  count(category) %>% 
+  left_join(
+    food_train %>% 
+    count(category,brand) %>% 
+    group_by(category) %>% 
+    count(category) %>% 
+    rename(num_brands = n),
+    by = 'category'
+    )
+```
+
+```{r, include = F}
+table1 <- food_train %>% 
+  count(category,brand) %>% 
+  group_by(category) %>% 
+  count(category) %>% 
+  rename(num_brnds = n) %>% 
+  left_join(food_train %>%  count(category),
+            by = "category") %>% 
+  mutate(snacks_brnd =  n/ num_brnds,
+         # diversity 0 means monoply 1 means big competition
+         diversity = num_brnds / n) %>% 
+  rename(total_snacks = n) %>% 
+  mutate(category = 
+  case_when(category == "cakes_cupcakes_snack_cakes" ~ 'cakes',
+            category =="chips_pretzels_snacks" ~ 'chips',
+            category == 'cookies_biscuits' ~ 'cookies',
+            category == 'popcorn_peanuts_seeds_related_snacks' ~ 'snack related',
+            TRUE ~ as.character(category))
+  )
+```
+
+```{r}
+table1 %>% 
+  ggplot(mapping = aes(x = category, y = diversity, fill = category))+
+  geom_col()+
+  theme(
+        axis.ticks.x=element_blank(),
+        legend.position  = "none"
+        )+
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 11, hjust = 1)
+   )+
+  #geom_text(aes( label = paste0("n = ", total_snacks)), nudge_y = +0.02)+
+  geom_label(aes(label = round(diversity, 2)))
+```
+
+We can see that popcorn peanuts and snacks have the lowest diversity.
+But it also the most common category in the training sample. As always,
+this breaks some economical models assumptions. As we saw before a large
+parcentege of those products have only one ingredient (nuts or seeds).
+It's a generic product so we expect it to have more sellers. Another
+possible explanation is that most of these sellers operate on a small
+business scale, So They don't need an FDA registration to sell their
+nuts.
+
+This leads as to the second question..
+
+# Question2: Why there is less competition in the popcorn market?
+
+Let's dig further into popcorn category, I will look at the brands and
+look if there are any significant players.
+
+```{r}
+set.seed(12323)
+food_train %>%
+  filter(category == "popcorn_peanuts_seeds_related_snacks" ) %>%
+  count(brand, sort = TRUE) %>% 
+  mutate(y_random = c(runif(1265, min = -1, max = 1))) %>% 
+  filter(n > 50) %>% 
+  ggplot(aes(x = n, y = y_random, label = brand, color = as.factor(n))) +
+  ggtitle('Brands that sell more then 50 items in the seed category')+
+  geom_text_repel(max.overlaps = 1265) +
+  theme_minimal() +
+  theme(legend.position = "None",
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank()) +  
+  labs(x = "Offered products",
+       y = "Brand name")
+```
+
+Looking at the biggest sellers here (meijer and target) we can
+understand that the biggest players are not food focused companies but
+big retailers. with much less products pharmacies like cvs and walgreens
+are also big players. only nabisco is a company that focuses mainly on
+packaged foods.
+
+So I saw that retail stores and pharmacies of the branded snacks in the
+seeds category. Let's see what is the situation in a category with more
+*diversity*. for example the cookies category.
+
+```{r}
+set.seed(12323)
+food_train %>%
+  filter(category == "cookies_biscuits" ) %>%
+  count(brand, sort = TRUE) %>% 
+  mutate(y_random = c(runif(1274, min = -1, max = 1))) %>% 
+  filter(n > 50) %>% 
+  ggplot(aes(x = n, y = y_random, label = brand, color = as.factor(n))) +
+  ggtitle('Brands that sell more then 50 items in the coockie category')+
+  geom_text_repel(max.overlaps = 1274) +
+  theme_minimal() +
+  theme(legend.position = "None",
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank()) +  
+  labs(x = "Offered products",
+       y = "Brand name")
+```
+
+In the cookie market only two out of the largest 5 selling brands are
+not food focused. Nabisco biscuit company lives up to it's name :). To
+support the effectiveness I gave of measuring the competition we can see
+here that there are less brands that sell more then 50 products. (12 in
+this category and 29 in the seed category) although there are slightly
+more brands in this category then the last one (1274 and 1265)/
+
+the only category where the top 5 sellers are food focused companies is
+the chocolate category. To be in the chocolate business you really need
+to focus.
+
+# Question 3: how is nabisco different?
+
+let's analyze nabisco in the cookie category,how are they're product
+differ from the the others?
+
+I will conduct a paired t test for each nutritional value with the
+hypothesis that the means of nabisco are the same as the avarege cookie
+& biscuit company.
+
+```{r}
+food_final %>% 
+  filter(category == "cookies_biscuits") %>% 
+  select(-c(idx, category)) %>% 
+  summarise(across(where(is.numeric), list(avg = mean, sd = sd))) %>% 
+  bind_rows(food_final %>% 
+  filter(category == "cookies_biscuits") %>% 
+  filter(brand == "nabisco biscuit company") %>% 
+  select(-c(idx, category)) %>% 
+  summarise(across(where(is.numeric), list(avg = mean, sd = sd))))
+  
+```
+
+```{r}
+cookie_avg = food_final %>% 
+  filter(category == "cookies_biscuits") %>% 
+  select(-c(idx, category)) %>% 
+  summarise(across(where(is.numeric), list(avg = mean))) %>% 
+  slice(1) %>% 
+  as.numeric()
+
+cookie_sd =food_final %>% 
+  filter(category == "cookies_biscuits") %>% 
+  select(-c(idx, category)) %>% 
+  summarise(across(where(is.numeric), list(sd = sd))) %>% 
+  slice(1) %>% 
+  as.numeric()
+
+nobosco_avgs = food_final %>% 
+  filter(category == "cookies_biscuits") %>% 
+  filter(brand == "nabisco biscuit company") %>% 
+  select(-c(idx, category)) %>% 
+  summarise(across(where(is.numeric), list(avg = mean))) %>% 
+  slice(1) %>% 
+  as.numeric()
+
+nobosco_sd = food_final %>% 
+  filter(category == "cookies_biscuits") %>% 
+  filter(brand == "nabisco biscuit company") %>% 
+  select(-c(idx, category)) %>% 
+  summarise(across(where(is.numeric), list(sd = sd))) %>% 
+  slice(1) %>% 
+  as.numeric()
+```
+
+```{r}
+all_ttest = function(nb_avg, nb_sd, all_avg, all_sd,n1 ,n2){
+  m = length(nb_avg)
+  t = numeric(m)
+  for (i in 1:m){
+    sp = sqrt(((n1- 1)*(nb_sd[i])^2 + (n2-1)*(all_sd[i])^2)/(n1+n2 -2))
+    t[i] = abs((nb_avg[i]-all_avg[i])/(sp*sqrt(1/n1+1/n2))) > qt(0.975,n1 + n2- 2)
+  }
+  return(t)
+}
+
+
+
+b = all_ttest(nobosco_avgs,nobosco_sd,cookie_avg,cookie_sd, 140,5284)
+
+```
+
+From this test I can search for nad reject the null hypothesis with 0.05
+significance that carbohydrate, energy, calcium, sodium and saturated
+fats are different in the nobisco brand from the average cookie/biscuit
+product.
+
+And That's It. Good luck with the rest of your life!
+
+Thank you for all the mind blows I had in this semester in your course.
